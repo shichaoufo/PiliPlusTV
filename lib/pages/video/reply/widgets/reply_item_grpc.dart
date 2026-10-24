@@ -456,16 +456,20 @@ class ReplyItemGrpc extends StatelessWidget {
     if (!focusableContent) {
       return block;
     }
-    return InkWell(
-      borderRadius: const .all(.circular(6)),
-      focusColor: colorScheme.primary.withValues(alpha: 0.10),
-      onTap: () {
-        // 有图片时进入图片预览；无图片时空操作（保留停靠点）
-        if (pictures.isNotEmpty) {
-          imageGrid.previewAt(context, 0);
-        }
-      },
-      child: block,
+    return FocusTraversalOrder(
+      // 详情页首楼的内部顺序：正文内容 = 1（其后是按钮排 2~5）
+      order: const NumericFocusOrder(1),
+      child: InkWell(
+        borderRadius: const .all(.circular(6)),
+        focusColor: colorScheme.primary.withValues(alpha: 0.10),
+        onTap: () {
+          // 有图片时进入图片预览；无图片时空操作（保留停靠点）
+          if (pictures.isNotEmpty) {
+            imageGrid.previewAt(context, 0);
+          }
+        },
+        child: block,
+      ),
     );
   }
 
@@ -572,40 +576,54 @@ class ReplyItemGrpc extends StatelessWidget {
         ),
       );
     }
+
+    // 详情页首楼（focusableActions）：给这排按钮设定显式遍历顺序，
+    // 顺序为 回复(2) → 翻译(3) → 点踩(4) → 点赞(5)，接在正文内容(1)之后。
+    // 默认几何遍历会因正文停靠点过宽而落到右侧的点赞，“回复”永远选不中。
+    Widget wrapOrder(double order, Widget child) => focusableActions
+        ? FocusTraversalOrder(order: NumericFocusOrder(order), child: child)
+        : child;
+
     return Row(
       children: [
         const SizedBox(width: 36),
-        SizedBox(
-          height: 32,
-          child: TextButton(
-            style: buttonStyle,
-            onPressed: () {
-              feedBack();
-              onReply?.call(replyItem);
-            },
-            child: Row(
-              spacing: 3,
-              mainAxisSize: .min,
-              children: [
-                Icon(
-                  Icons.reply,
-                  size: 18,
-                  color: colorScheme.outline.withValues(alpha: 0.8),
-                ),
-                Text('回复', style: textStyle),
-              ],
+        wrapOrder(
+          2,
+          SizedBox(
+            height: 32,
+            child: TextButton(
+              style: buttonStyle,
+              onPressed: () {
+                feedBack();
+                onReply?.call(replyItem);
+              },
+              child: Row(
+                spacing: 3,
+                mainAxisSize: .min,
+                children: [
+                  Icon(
+                    Icons.reply,
+                    size: 18,
+                    color: colorScheme.outline.withValues(alpha: 0.8),
+                  ),
+                  Text('回复', style: textStyle),
+                ],
+              ),
             ),
           ),
         ),
         const SizedBox(width: 2),
         if (replyControl.translationSwitch ==
             .TRANSLATION_SWITCH_SHOW_TRANSLATION) ...[
-          _buildTranslateBtn(
-            context,
-            colorScheme,
-            replyControl,
-            textStyle,
-            buttonStyle,
+          wrapOrder(
+            3,
+            _buildTranslateBtn(
+              context,
+              colorScheme,
+              replyControl,
+              textStyle,
+              buttonStyle,
+            ),
           ),
           const SizedBox(width: 2),
         ] else if (replyControl.cardLabels.isNotEmpty) ...[
@@ -619,7 +637,11 @@ class ReplyItemGrpc extends StatelessWidget {
         ],
         ?dialogBtn,
         const Spacer(),
-        ZanButtonGrpc(replyItem: replyItem),
+        ZanButtonGrpc(
+          replyItem: replyItem,
+          dislikeOrder: focusableActions ? 4 : null,
+          likeOrder: focusableActions ? 5 : null,
+        ),
         const SizedBox(width: 5),
       ],
     );

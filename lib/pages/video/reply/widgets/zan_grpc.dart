@@ -13,9 +13,18 @@ class ZanButtonGrpc extends StatelessWidget {
   const ZanButtonGrpc({
     super.key,
     required this.replyItem,
+    this.dislikeOrder,
+    this.likeOrder,
   });
 
   final ReplyInfo replyItem;
+
+  /// 点踩/点赞按钮的焦点遍历顺序（配合 OrderedTraversalPolicy）。
+  /// 非 null 时外包 FocusTraversalOrder，让遥控器方向键经
+  /// next/previousFocus 按显式顺序到达，而不是靠几何距离
+  /// （正文停靠点很宽，默认几何遍历会跳过左侧按钮）。
+  final double? dislikeOrder;
+  final double? likeOrder;
 
   Future<void> onHateReply(
     BuildContext context, {
@@ -105,6 +114,10 @@ class ZanButtonGrpc extends StatelessWidget {
       visualDensity: VisualDensity.compact,
     );
 
+    Widget wrapOrder(double? order, Widget child) => order == null
+        ? child
+        : FocusTraversalOrder(order: NumericFocusOrder(order), child: child);
+
     @pragma('vm:prefer-inline')
     Future<void> wrapProcessing(
       Future<void> Function(
@@ -123,54 +136,60 @@ class ZanButtonGrpc extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SizedBox(
-          height: 32,
-          child: TextButton(
-            style: const ButtonStyle(
-              visualDensity: .compact,
-              tapTargetSize: .shrinkWrap,
-              padding: WidgetStatePropertyAll(.zero),
-              minimumSize: WidgetStatePropertyAll(.square(40)),
-            ),
-            onPressed: isLogin
-                ? () => wrapProcessing(onHateReply)
-                : _toastNotLogin,
-            child: Icon(
-              isDislike
-                  ? FontAwesomeIcons.solidThumbsDown
-                  : FontAwesomeIcons.thumbsDown,
-              size: 16,
-              color: isDislike ? primary : outline,
-              semanticLabel: isDislike ? '已踩' : '点踩',
+        wrapOrder(
+          dislikeOrder,
+          SizedBox(
+            height: 32,
+            child: TextButton(
+              style: const ButtonStyle(
+                visualDensity: .compact,
+                tapTargetSize: .shrinkWrap,
+                padding: WidgetStatePropertyAll(.zero),
+                minimumSize: WidgetStatePropertyAll(.square(40)),
+              ),
+              onPressed: isLogin
+                  ? () => wrapProcessing(onHateReply)
+                  : _toastNotLogin,
+              child: Icon(
+                isDislike
+                    ? FontAwesomeIcons.solidThumbsDown
+                    : FontAwesomeIcons.thumbsDown,
+                size: 16,
+                color: isDislike ? primary : outline,
+                semanticLabel: isDislike ? '已踩' : '点踩',
+              ),
             ),
           ),
         ),
-        SizedBox(
-          height: 32,
-          child: TextButton(
-            style: style,
-            onPressed: isLogin
-                ? () => wrapProcessing(onLikeReply)
-                : _toastNotLogin,
-            child: Row(
-              spacing: 4,
-              children: [
-                Icon(
-                  isLike
-                      ? FontAwesomeIcons.solidThumbsUp
-                      : FontAwesomeIcons.thumbsUp,
-                  size: 16,
-                  color: isLike ? primary : outline,
-                  semanticLabel: isLike ? '已赞' : '点赞',
-                ),
-                Text(
-                  NumUtils.numFormat(replyItem.like.toInt()),
-                  style: TextStyle(
+        wrapOrder(
+          likeOrder,
+          SizedBox(
+            height: 32,
+            child: TextButton(
+              style: style,
+              onPressed: isLogin
+                  ? () => wrapProcessing(onLikeReply)
+                  : _toastNotLogin,
+              child: Row(
+                spacing: 4,
+                children: [
+                  Icon(
+                    isLike
+                        ? FontAwesomeIcons.solidThumbsUp
+                        : FontAwesomeIcons.thumbsUp,
+                    size: 16,
                     color: isLike ? primary : outline,
-                    fontSize: theme.textTheme.labelSmall!.fontSize,
+                    semanticLabel: isLike ? '已赞' : '点赞',
                   ),
-                ),
-              ],
+                  Text(
+                    NumUtils.numFormat(replyItem.like.toInt()),
+                    style: TextStyle(
+                      color: isLike ? primary : outline,
+                      fontSize: theme.textTheme.labelSmall!.fontSize,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

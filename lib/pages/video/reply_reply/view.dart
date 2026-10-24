@@ -104,6 +104,14 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
 
   late final bool isDialogue = widget.dialog != null;
 
+  /// 焦点遍历顺序（OrderedTraversalPolicy + FocusTraversalOrder）：
+  /// 0 = 首楼整体；1 = 正文内容；2 = 回复；3 = 翻译；4 = 点踩；5 = 点赞；
+  /// 6 起 = 楼中楼各条（按列表 index 递增）；末尾大值 = 页面级按钮。
+  static const double _firstFloorOrder = 0;
+  static const double _subReplyBaseOrder = 6;
+  static const double _sortBtnOrder = 1000000;
+  static const double _closeBtnOrder = 1000001;
+
   /// 首楼焦点节点。
   /// 注意：评论详情是 MiniScaffold 的底部弹窗，与视频页同处一个 FocusScope，
   /// 打开时原焦点（评论主楼）仍在，`autofocus` 会被 FocusManager 丢弃
@@ -168,41 +176,51 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
   @override
   Widget buildPage(ThemeData theme) {
     Widget child() => enableSlide ? slideList(theme) : buildList(theme);
-    // FocusScope 把方向键遍历限制在详情页内，不会穿透到背后的视频页/评论列表
+    // FocusScope 把方向键遍历限制在详情页内，不会穿透到背后的视频页/评论列表；
+    // FocusTraversalGroup(OrderedTraversalPolicy) 让 next/previousFocus
+    // （本页遥控器方向键经首楼 onKeyEvent 转换而来）按 FocusTraversalOrder
+    // 显式排序，而不是默认的几何阅读顺序。
     return FocusScope(
-      child: SimpleColoredBox(
-        color: theme.canvasColor,
-        child: MiniScaffold(
-          body: widget.isVideoDetail
-              ? Column(
-                  children: [
-                    Container(
-                      height: 45,
-                      decoration: BoxDecoration(
-                        border: Border(
-                          bottom: BorderSide(
-                            width: 1,
-                            color: theme.dividerColor.withValues(alpha: 0.1),
+      child: FocusTraversalGroup(
+        policy: OrderedTraversalPolicy(),
+        child: SimpleColoredBox(
+          color: theme.canvasColor,
+          child: MiniScaffold(
+            body: widget.isVideoDetail
+                ? Column(
+                    children: [
+                      Container(
+                        height: 45,
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(
+                              width: 1,
+                              color: theme.dividerColor.withValues(alpha: 0.1),
+                            ),
                           ),
                         ),
+                        padding: const EdgeInsets.only(left: 12, right: 2),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: <Widget>[
+                            Text(isDialogue ? '对话列表' : '评论详情'),
+                            FocusTraversalOrder(
+                              // 排在楼中楼之后（链尾再往后才到页面级按钮）
+                              order: const NumericFocusOrder(_closeBtnOrder),
+                              child: IconButton(
+                                tooltip: '关闭',
+                                icon: const Icon(Icons.close, size: 20),
+                                onPressed: Get.back,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                      padding: const EdgeInsets.only(left: 12, right: 2),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: <Widget>[
-                          Text(isDialogue ? '对话列表' : '评论详情'),
-                          IconButton(
-                            tooltip: '关闭',
-                            icon: const Icon(Icons.close, size: 20),
-                            onPressed: Get.back,
-                          ),
-                        ],
-                      ),
-                    ),
-                    Expanded(child: child()),
-                  ],
-                )
-              : child(),
+                      Expanded(child: child()),
+                    ],
+                  )
+                : child(),
+          ),
         ),
       ),
     );
@@ -257,41 +275,74 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
     return SliverMainAxisGroup(
       slivers: [
         SliverToBoxAdapter(
-          child: Focus(
-            focusNode: _firstFloorNode,
-            canRequestFocus: true,
-            onFocusChange: (value) {
-              if (mounted && value != _firstFloorFocused) {
-                setState(() => _firstFloorFocused = value);
-              }
-            },
-            onKeyEvent: (node, event) {
-              // 焦点在首楼整体上时，确定键把焦点送入“正文内容”
-              // （正文 + 图片，再往下是回复/翻译/点赞/点踩按钮排）；
-              // 焦点已在内部停靠点时放行，由其自身响应确定键。
-              if (event is KeyDownEvent &&
-                  FocusManager.instance.primaryFocus == node &&
-                  _isConfirmKey(event.logicalKey)) {
-                node.nextFocus();
-                return KeyEventResult.handled;
-              }
-              return KeyEventResult.ignored;
-            },
-            child: ColoredBox(
-              color: _firstFloorFocused
-                  ? theme.colorScheme.primary.withValues(alpha: 0.08)
-                  : Colors.transparent,
-              child: ReplyItemGrpc(
-                replyItem: firstFloor,
-                replyLevel: 2,
-                needDivider: false,
-                focusableBody: false,
-                focusableActions: true,
-                focusableContent: true,
-                onReply: (replyItem) =>
-                    _controller.onReply(replyItem, index: -1),
-                upMid: widget.upMid ?? _controller.upMid,
-                onCheckReply: _controller.onCheckReply,
+          child: FocusTraversalOrder(
+            // 首楼整体 = 0：内部停靠点往前一级回到这里
+            order: const NumericFocusOrder(_firstFloorOrder),
+            child: Focus(
+              focusNode: _firstFloorNode,
+              canRequestFocus: true,
+              onFocusChange: (value) {
+                if (mounted && value != _firstFloorFocused) {
+                  setState(() => _firstFloorFocused = value);
+                }
+              },
+              onKeyEvent: (node, event) {
+                if (event is! KeyDownEvent) {
+                  return KeyEventResult.ignored;
+                }
+                final key = event.logicalKey;
+                final focus = FocusManager.instance.primaryFocus;
+                final forward =
+                    key == LogicalKeyboardKey.arrowDown ||
+                    key == LogicalKeyboardKey.arrowRight;
+                final backward =
+                    key == LogicalKeyboardKey.arrowUp ||
+                    key == LogicalKeyboardKey.arrowLeft;
+                if (focus == node) {
+                  // 焦点在首楼整体：确定键或 ↓/→ 进入评论内部
+                  // （链首 = “正文内容”停靠点）
+                  if (_isConfirmKey(key) || forward) {
+                    node.nextFocus();
+                    return KeyEventResult.handled;
+                  }
+                  // ↑/← 走默认几何遍历（页面顶部“关闭”按钮）
+                  return KeyEventResult.ignored;
+                }
+                // 焦点在评论内部停靠点（正文/回复/翻译/点踩/点赞）。
+                // 方向键沿显式顺序前后移动：默认几何遍历会因正文停靠点
+                // 过宽、按钮排在右下而跳过左侧的“回复”按钮。
+                // 楼中楼节点的按键不经过这里（与首楼是兄弟 sliver），
+                // 仍走默认遍历，不受影响。
+                if (forward || backward) {
+                  if (focus != null) {
+                    if (forward) {
+                      focus.nextFocus();
+                    } else {
+                      focus.previousFocus();
+                    }
+                    return KeyEventResult.handled;
+                  }
+                }
+                // 确定键放行：由停靠点自身响应
+                // （正文 → 图片预览，按钮 → 回复/点赞/点踩）
+                return KeyEventResult.ignored;
+              },
+              child: ColoredBox(
+                color: _firstFloorFocused
+                    ? theme.colorScheme.primary.withValues(alpha: 0.08)
+                    : Colors.transparent,
+                child: ReplyItemGrpc(
+                  replyItem: firstFloor,
+                  replyLevel: 2,
+                  needDivider: false,
+                  focusableBody: false,
+                  focusableActions: true,
+                  focusableContent: true,
+                  onReply: (replyItem) =>
+                      _controller.onReply(replyItem, index: -1),
+                  upMid: widget.upMid ?? _controller.upMid,
+                  onCheckReply: _controller.onCheckReply,
+                ),
               ),
             ),
           ),
@@ -332,14 +383,20 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
                     : const SizedBox.shrink();
               },
             ),
-            TextButton.icon(
-              style: Style.buttonStyle,
-              onPressed: _controller.queryBySort,
-              icon: Icon(Icons.sort, size: 16, color: colorScheme.secondary),
-              label: Obx(
-                () => Text(
-                  _controller.sortType.value.label,
-                  style: TextStyle(fontSize: 13, color: colorScheme.secondary),
+            FocusTraversalOrder(
+              order: const NumericFocusOrder(_sortBtnOrder),
+              child: TextButton.icon(
+                style: Style.buttonStyle,
+                onPressed: _controller.queryBySort,
+                icon: Icon(Icons.sort, size: 16, color: colorScheme.secondary),
+                label: Obx(
+                  () => Text(
+                    _controller.sortType.value.label,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: colorScheme.secondary,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -397,32 +454,50 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
   }
 
   Widget _replyItem(BuildContext context, ReplyInfo replyItem, int index) {
-    return ReplyItemGrpc(
-      replyItem: replyItem,
-      replyLevel: isDialogue ? 3 : 2,
-      // 详情页的子回复列表不参与焦点遍历（确定键焦点只在首楼操作按钮）
-      focusableBody: false,
-      focusableActions: false,
-      onReply: (replyItem) => _controller.onReply(replyItem, index: index),
-      onDelete: (item, subIndex) => _controller.onRemove(index, item, null),
-      upMid: _controller.upMid,
-      showDialogue: () => MiniScaffold.of(context).showBottomSheet(
-        constraints: const BoxConstraints(),
-        (context) => VideoReplyReplyPanel(
-          oid: replyItem.oid.toInt(),
-          rpid: replyItem.root.toInt(),
-          dialog: replyItem.dialog.toInt(),
-          replyType: widget.replyType,
-          isVideoDetail: true,
-          isNested: widget.isNested,
+    return FocusTraversalOrder(
+      // 楼中楼各条按列表顺序编号：链尾（点赞）↓ 落到第一条，
+      // 各条之间仍走默认几何遍历（每条独占一行）
+      order: NumericFocusOrder(_subReplyBaseOrder + index),
+      child: ReplyItemGrpc(
+        replyItem: replyItem,
+        replyLevel: isDialogue ? 3 : 2,
+        // 楼中楼可聚焦：确定键经 InkWell.onTap 打开这条子回复的详情
+        focusableBody: true,
+        focusableActions: false,
+        replyReply: (item, id) => MiniScaffold.of(context).showBottomSheet(
+          constraints: const BoxConstraints(),
+          (context) => VideoReplyReplyPanel(
+            id: id,
+            oid: item.oid.toInt(),
+            rpid: item.id.toInt(),
+            firstFloor: item,
+            replyType: widget.replyType,
+            isVideoDetail: true,
+            isNested: widget.isNested,
+            upMid: _controller.upMid,
+          ),
         ),
+        onReply: (replyItem) => _controller.onReply(replyItem, index: index),
+        onDelete: (item, subIndex) => _controller.onRemove(index, item, null),
+        upMid: _controller.upMid,
+        showDialogue: () => MiniScaffold.of(context).showBottomSheet(
+          constraints: const BoxConstraints(),
+          (context) => VideoReplyReplyPanel(
+            oid: replyItem.oid.toInt(),
+            rpid: replyItem.root.toInt(),
+            dialog: replyItem.dialog.toInt(),
+            replyType: widget.replyType,
+            isVideoDetail: true,
+            isNested: widget.isNested,
+          ),
+        ),
+        jumpToDialogue: () {
+          if (!_controller.setIndexById(replyItem.parent)) {
+            SmartDialog.showToast('评论可能已被删除');
+          }
+        },
+        onCheckReply: _controller.onCheckReply,
       ),
-      jumpToDialogue: () {
-        if (!_controller.setIndexById(replyItem.parent)) {
-          SmartDialog.showToast('评论可能已被删除');
-        }
-      },
-      onCheckReply: _controller.onCheckReply,
     );
   }
 }
