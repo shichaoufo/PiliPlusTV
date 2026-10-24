@@ -77,6 +77,8 @@ class ReplyItemGrpc extends StatelessWidget {
     this.onCheckReply,
     this.onToggleTop,
     this.jumpToDialogue,
+    this.focusableBody = true,
+    this.focusableActions = false,
   });
   final ReplyInfo replyItem;
   final int replyLevel;
@@ -91,6 +93,16 @@ class ReplyItemGrpc extends StatelessWidget {
   final ValueChanged<ReplyInfo>? onCheckReply;
   final ValueChanged<ReplyInfo>? onToggleTop;
   final VoidCallback? jumpToDialogue;
+
+  /// 整项（评论主体）是否参与方向键焦点遍历。
+  /// 评论主列表为 true（上下键在评论主楼间移动）；
+  /// 评论详情页的首楼为 false（确定键不落到无操作的主体上）。
+  final bool focusableBody;
+
+  /// 项内操作按钮（回复/翻译/点赞/点踩）是否参与方向键焦点遍历。
+  /// 主列表为 false（上下键只在主楼间移动，不进入楼中楼和按钮）；
+  /// 评论详情页首楼为 true（确定键把焦点送入这排按钮）。
+  final bool focusableActions;
 
   static final _voteRegExp = RegExp(r"^\{vote:\d+?\}$");
   static final _timeRegExp = RegExp(r'^(?:\d+[:：])?\d+[:：]\d+$');
@@ -139,6 +151,7 @@ class ReplyItemGrpc extends StatelessWidget {
     return Material(
       type: MaterialType.transparency,
       child: InkWell(
+        canRequestFocus: focusableBody,
         onTap: () => replyReply?.call(replyItem, null),
         onLongPress: showMore,
         onSecondaryTap: PlatformUtils.isMobile ? null : showMore,
@@ -388,12 +401,28 @@ class ReplyItemGrpc extends StatelessWidget {
         ],
         if (replyLevel != 0) ...[
           const SizedBox(height: 4),
-          buttonAction(context, colorScheme, replyControl),
+          // 主列表中这排按钮不参与焦点遍历（上下键只在主楼间移动）
+          if (focusableActions)
+            buttonAction(context, colorScheme, replyControl)
+          else
+            ExcludeFocus(
+              excluding: true,
+              child: buttonAction(context, colorScheme, replyControl),
+            ),
         ],
         if (replyLevel == 1 && replyItem.count > Int64.ZERO) ...[
           Padding(
             padding: const EdgeInsets.only(top: 5, bottom: 12),
-            child: replyItemRow(context, colorScheme, replyItem.replies),
+            child: focusableActions
+                ? replyItemRow(context, colorScheme, replyItem.replies)
+                : ExcludeFocus(
+                    excluding: true,
+                    child: replyItemRow(
+                      context,
+                      colorScheme,
+                      replyItem.replies,
+                    ),
+                  ),
           ),
         ],
       ],

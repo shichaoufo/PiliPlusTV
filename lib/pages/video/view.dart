@@ -73,6 +73,7 @@ import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, clampDouble;
+import 'package:flutter/services.dart' show KeyDownEvent, LogicalKeyboardKey;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
@@ -125,6 +126,37 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       videoDetailController.plPlayerController.pipNoDanmaku;
 
   bool isShowing = true;
+
+  // ---- 遥控器/D-pad 焦点区域 ----
+  // false: 焦点在播放器（默认，播放器热键生效）
+  // true : 焦点在右侧栏目（方向键走默认焦点遍历）
+  bool _sidePanelActive = false;
+  final FocusNode _playerFocusNode = FocusNode(debugLabel: 'video-player');
+  final FocusNode _sideTabBarFocusNode = FocusNode(
+    debugLabel: 'video-side-tabbar',
+  );
+  bool _sideTabBarFocused = false;
+
+  void _enterSidePanel() {
+    if (!mounted) return;
+    setState(() => _sidePanelActive = true);
+    _sideTabBarFocusNode.requestFocus();
+  }
+
+  void _exitSidePanel() {
+    if (!mounted) return;
+    setState(() => _sidePanelActive = false);
+    _playerFocusNode.requestFocus();
+  }
+
+  void _switchSideTab(int delta) {
+    final tabCtr = videoDetailController.tabCtr;
+    if (tabCtr.length <= 1) return;
+    final next = (tabCtr.index + delta).clamp(0, tabCtr.length - 1);
+    if (next != tabCtr.index) {
+      tabCtr.animateTo(next);
+    }
+  }
 
   bool get isFullScreen =>
       videoDetailController.plPlayerController.isFullScreen.value;
@@ -339,6 +371,9 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
   @override
   void dispose() {
+    _playerFocusNode.dispose();
+    _sideTabBarFocusNode.dispose();
+
     plPlayerController
       ?..removeStatusLister(playerListener)
       ..removePositionListener(positionListener);
@@ -1213,11 +1248,21 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   }) => popScope(
     key: videoDetailController.videoPlayerKey,
     canPop:
+        // 焦点在右侧栏目时，返回键用于把焦点交还给播放器，不弹出页面
+        !_sidePanelActive &&
         !isFullScreen &&
         !videoDetailController.plPlayerController.isDesktopPip &&
         (videoDetailController.horizontalScreen || isPortrait),
-    onPopInvokedWithResult:
-        videoDetailController.plPlayerController.onPopInvokedWithResult,
+    onPopInvokedWithResult: (didPop, result) {
+      if (!didPop && _sidePanelActive && !isFullScreen) {
+        _exitSidePanel();
+        return;
+      }
+      videoDetailController.plPlayerController.onPopInvokedWithResult(
+        didPop,
+        result,
+      );
+    },
     child: Obx(
       () =>
           !videoDetailController.videoState.value ||
@@ -1280,6 +1325,9 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     }
     if (videoDetailController.plPlayerController.keyboardControl) {
       child = PlayerFocus(
+        focusNode: _playerFocusNode,
+        sidePanelActive: _sidePanelActive,
+        onEnterSidePanel: _enterSidePanel,
         plPlayerController: videoDetailController.plPlayerController,
         introController: introController,
         onSendDanmaku: videoDetailController.showShootDanmakuSheet,
@@ -1378,78 +1426,107 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       );
     }
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(
-            color: theme.dividerColor.withValues(alpha: 0.1),
+    return Focus(
+      focusNode: _sideTabBarFocusNode,
+      canRequestFocus: true,
+      onFocusChange: (_) {
+        if (mounted) {
+          setState(() => _sideTabBarFocused = _sideTabBarFocusNode.hasFocus);
+        }
+      },
+      onKeyEvent: (node, event) {
+        // 仅当焦点在 Tab 栏本身时，左右键切换 Tab；
+        // 焦点在栏内按钮（发弹幕/弹幕开关）上时不拦截。
+        if (event is! KeyDownEvent ||
+            FocusManager.instance.primaryFocus != node) {
+          return KeyEventResult.ignored;
+        }
+        switch (event.logicalKey) {
+          case LogicalKeyboardKey.arrowLeft:
+            _switchSideTab(-1);
+            return KeyEventResult.handled;
+          case LogicalKeyboardKey.arrowRight:
+            _switchSideTab(1);
+            return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(
+            top: _sideTabBarFocused
+                ? BorderSide(color: colorScheme.primary, width: 2)
+                : BorderSide.none,
+            bottom: BorderSide(
+              color: theme.dividerColor.withValues(alpha: 0.1),
+            ),
           ),
         ),
-      ),
-      child: SizedBox(
-        height: 45,
-        child: Row(
-          children: [
-            if (tabs.isEmpty)
-              const Spacer()
-            else
-              Expanded(
-                child: Align(
-                  alignment: .centerLeft,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: 96.0 * tabs.length),
-                    child: tabBar(),
-                  ),
-                ),
-              ),
-            SizedBox(
-              height: 32,
-              child: TextButton(
-                style: const ButtonStyle(
-                  padding: WidgetStatePropertyAll(.zero),
-                ),
-                onPressed: videoDetailController.showShootDanmakuSheet,
-                child: Text(
-                  '发弹幕',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ),
-            SizedBox.square(
-              dimension: 38,
-              child: Obx(
-                () {
-                  final ctr = videoDetailController.plPlayerController;
-                  final enableShowDanmaku = ctr.enableShowDanmaku.value;
-                  return IconButton(
-                    onPressed: () {
-                      final newVal = !enableShowDanmaku;
-                      ctr.enableShowDanmaku.value = newVal;
-                      if (!ctr.tempPlayerConf) {
-                        GStorage.setting.put(
-                          SettingBoxKey.enableShowDanmaku,
-                          newVal,
-                        );
-                      }
-                    },
-                    icon: Icon(
-                      size: 22,
-                      enableShowDanmaku
-                          ? CustomIcons.dm_on
-                          : CustomIcons.dm_off,
-                      color: enableShowDanmaku
-                          ? colorScheme.secondary
-                          : colorScheme.outline,
+        child: SizedBox(
+          height: 45,
+          child: Row(
+            children: [
+              if (tabs.isEmpty)
+                const Spacer()
+              else
+                Expanded(
+                  child: Align(
+                    alignment: .centerLeft,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: 96.0 * tabs.length),
+                      child: tabBar(),
                     ),
-                  );
-                },
+                  ),
+                ),
+              SizedBox(
+                height: 32,
+                child: TextButton(
+                  style: const ButtonStyle(
+                    padding: WidgetStatePropertyAll(.zero),
+                  ),
+                  onPressed: videoDetailController.showShootDanmakuSheet,
+                  child: Text(
+                    '发弹幕',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(width: 14),
-          ],
+              SizedBox.square(
+                dimension: 38,
+                child: Obx(
+                  () {
+                    final ctr = videoDetailController.plPlayerController;
+                    final enableShowDanmaku = ctr.enableShowDanmaku.value;
+                    return IconButton(
+                      onPressed: () {
+                        final newVal = !enableShowDanmaku;
+                        ctr.enableShowDanmaku.value = newVal;
+                        if (!ctr.tempPlayerConf) {
+                          GStorage.setting.put(
+                            SettingBoxKey.enableShowDanmaku,
+                            newVal,
+                          );
+                        }
+                      },
+                      icon: Icon(
+                        size: 22,
+                        enableShowDanmaku
+                            ? CustomIcons.dm_on
+                            : CustomIcons.dm_off,
+                        color: enableShowDanmaku
+                            ? colorScheme.secondary
+                            : colorScheme.outline,
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(width: 14),
+            ],
+          ),
         ),
       ),
     );

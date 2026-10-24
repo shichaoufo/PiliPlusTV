@@ -22,11 +22,16 @@ class VideoCardH extends StatelessWidget {
     this.onTap,
     this.onViewLater,
     this.onRemove,
+    this.menuKey,
   });
   final HorizontalVideoModel videoItem;
   final VoidCallback? onTap;
   final ValueChanged<int>? onViewLater;
   final VoidCallback? onRemove;
+
+  /// 卡片菜单按钮的 key：遥控器菜单键通过它程序化弹出菜单
+  /// （菜单按钮本身不参与方向键焦点遍历）。
+  final GlobalKey<PopupMenuButtonState>? menuKey;
 
   void onLongPress() => imageSaveDialog(
     bvid: videoItem.bvid,
@@ -128,10 +133,14 @@ class VideoCardH extends StatelessWidget {
             right: 12,
             width: 29,
             height: 29,
-            child: VideoPopupMenu(
-              iconSize: 17,
-              videoItem: videoItem,
-              onRemove: onRemove,
+            child: ExcludeFocus(
+              excluding: true,
+              child: VideoPopupMenu(
+                iconSize: 17,
+                videoItem: videoItem,
+                onRemove: onRemove,
+                menuKey: menuKey,
+              ),
             ),
           ),
         ],

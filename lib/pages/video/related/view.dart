@@ -5,6 +5,7 @@ import 'package:PiliPlus/models/model_hot_video_item.dart';
 import 'package:PiliPlus/pages/video/related/controller.dart';
 import 'package:PiliPlus/utils/extension/get_ext.dart';
 import 'package:PiliPlus/utils/grid.dart';
+import 'package:flutter/services.dart' show KeyDownEvent, LogicalKeyboardKey;
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -17,6 +18,12 @@ class RelatedVideoPanel extends StatefulWidget {
 
 class _RelatedVideoPanelState extends State<RelatedVideoPanel> with GridMixin {
   late final RelatedController _relatedController;
+
+  // 每张卡片的菜单按钮 key，供遥控器菜单键程序化弹出
+  final Map<int, GlobalKey<PopupMenuButtonState>> _menuKeys = {};
+
+  GlobalKey<PopupMenuButtonState> _menuKeyFor(int index) =>
+      _menuKeys.putIfAbsent(index, () => GlobalKey<PopupMenuButtonState>());
 
   @override
   void initState() {
@@ -43,11 +50,25 @@ class _RelatedVideoPanelState extends State<RelatedVideoPanel> with GridMixin {
             ? SliverGrid.builder(
                 gridDelegate: gridDelegate,
                 itemBuilder: (context, index) {
-                  return VideoCardH(
-                    videoItem: response[index],
-                    onRemove: () => _relatedController.loadingState
-                      ..value.data!.removeAt(index)
-                      ..refresh(),
+                  return Focus(
+                    // 仅作按键中转：焦点在卡片上时按菜单键弹出该卡片的菜单
+                    canRequestFocus: false,
+                    onKeyEvent: (node, event) {
+                      if (event is KeyDownEvent &&
+                          event.logicalKey == LogicalKeyboardKey.contextMenu &&
+                          node.hasFocus) {
+                        _menuKeyFor(index).currentState?.showButtonMenu();
+                        return KeyEventResult.handled;
+                      }
+                      return KeyEventResult.ignored;
+                    },
+                    child: VideoCardH(
+                      videoItem: response[index],
+                      menuKey: _menuKeyFor(index),
+                      onRemove: () => _relatedController.loadingState
+                        ..value.data!.removeAt(index)
+                        ..refresh(),
+                    ),
                   );
                 },
                 itemCount: response.length,

@@ -20,6 +20,7 @@ import 'package:PiliPlus/utils/num_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
 import 'package:fixnum/fixnum.dart' show Int64;
+import 'package:flutter/services.dart' show KeyDownEvent, LogicalKeyboardKey;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
@@ -102,6 +103,9 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
   late final _tag = Utils.makeHeroTag('${widget.rpid}${widget.dialog}');
 
   late final bool isDialogue = widget.dialog != null;
+
+  /// 首楼（或其操作按钮）是否持有焦点，用于给首楼加焦点底色提示
+  bool _firstFloorFocused = false;
 
   @override
   void didChangeDependencies() {
@@ -218,13 +222,42 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
     return SliverMainAxisGroup(
       slivers: [
         SliverToBoxAdapter(
-          child: ReplyItemGrpc(
-            replyItem: firstFloor,
-            replyLevel: 2,
-            needDivider: false,
-            onReply: (replyItem) => _controller.onReply(replyItem, index: -1),
-            upMid: widget.upMid ?? _controller.upMid,
-            onCheckReply: _controller.onCheckReply,
+          child: Focus(
+            autofocus: true,
+            canRequestFocus: true,
+            onFocusChange: (value) {
+              if (mounted && value != _firstFloorFocused) {
+                setState(() => _firstFloorFocused = value);
+              }
+            },
+            onKeyEvent: (node, event) {
+              // 焦点在首楼整体上时，确定键把焦点送入操作按钮
+              // （回复/翻译/点赞/点踩）；焦点已在按钮上时放行，
+              // 由按钮自身响应确定键。
+              if (event is KeyDownEvent &&
+                  FocusManager.instance.primaryFocus == node &&
+                  _isConfirmKey(event.logicalKey)) {
+                node.nextFocus();
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: ColoredBox(
+              color: _firstFloorFocused
+                  ? theme.colorScheme.primary.withValues(alpha: 0.08)
+                  : Colors.transparent,
+              child: ReplyItemGrpc(
+                replyItem: firstFloor,
+                replyLevel: 2,
+                needDivider: false,
+                focusableBody: false,
+                focusableActions: true,
+                onReply: (replyItem) =>
+                    _controller.onReply(replyItem, index: -1),
+                upMid: widget.upMid ?? _controller.upMid,
+                onCheckReply: _controller.onCheckReply,
+              ),
+            ),
           ),
         ),
         SliverToBoxAdapter(
@@ -237,6 +270,12 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
       ],
     );
   }
+
+  static bool _isConfirmKey(LogicalKeyboardKey key) =>
+      key == LogicalKeyboardKey.enter ||
+      key == LogicalKeyboardKey.space ||
+      key == LogicalKeyboardKey.select ||
+      key == LogicalKeyboardKey.gameButtonA;
 
   Widget _sortWidget(ColorScheme colorScheme) {
     return SliverPinnedHeader(
@@ -325,6 +364,9 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
     return ReplyItemGrpc(
       replyItem: replyItem,
       replyLevel: isDialogue ? 3 : 2,
+      // 详情页的子回复列表不参与焦点遍历（确定键焦点只在首楼操作按钮）
+      focusableBody: false,
+      focusableActions: false,
       onReply: (replyItem) => _controller.onReply(replyItem, index: index),
       onDelete: (item, subIndex) => _controller.onRemove(index, item, null),
       upMid: _controller.upMid,
