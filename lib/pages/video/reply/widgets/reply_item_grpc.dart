@@ -79,6 +79,7 @@ class ReplyItemGrpc extends StatelessWidget {
     this.jumpToDialogue,
     this.focusableBody = true,
     this.focusableActions = false,
+    this.focusableContent = false,
   });
   final ReplyInfo replyItem;
   final int replyLevel;
@@ -103,6 +104,11 @@ class ReplyItemGrpc extends StatelessWidget {
   /// 主列表为 false（上下键只在主楼间移动，不进入楼中楼和按钮）；
   /// 评论详情页首楼为 true（确定键把焦点送入这排按钮）。
   final bool focusableActions;
+
+  /// “正文内容”（正文 + 图片）是否为独立焦点停靠点。
+  /// 仅评论详情页首楼为 true：聚焦后按确定键进入图片预览
+  /// （评论无图片时为空操作，停靠点仍保留）。
+  final bool focusableContent;
 
   static final _voteRegExp = RegExp(r"^\{vote:\d+?\}$");
   static final _timeRegExp = RegExp(r'^(?:\d+[:：])?\d+[:：]\d+$');
@@ -347,6 +353,66 @@ class ReplyItemGrpc extends StatelessWidget {
             padding: padding,
             child: _buildVoteOption(colorScheme, replyControl.voteOption),
           ),
+        // 正文 + 图片组成“正文内容”块。评论详情页首楼可整体聚焦，
+        // 聚焦后确定键进入图片预览；其余场景仅是排版包裹，交互不变。
+        _buildContentBlock(context, colorScheme, padding),
+        if (replyLevel != 0) ...[
+          const SizedBox(height: 4),
+          // 主列表中这排按钮不参与焦点遍历（上下键只在主楼间移动）
+          if (focusableActions)
+            buttonAction(context, colorScheme, replyControl)
+          else
+            ExcludeFocus(
+              excluding: true,
+              child: buttonAction(context, colorScheme, replyControl),
+            ),
+        ],
+        if (replyLevel == 1 && replyItem.count > Int64.ZERO) ...[
+          Padding(
+            padding: const EdgeInsets.only(top: 5, bottom: 12),
+            child: focusableActions
+                ? replyItemRow(context, colorScheme, replyItem.replies)
+                : ExcludeFocus(
+                    excluding: true,
+                    child: replyItemRow(
+                      context,
+                      colorScheme,
+                      replyItem.replies,
+                    ),
+                  ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// “正文内容”块：正文文字 + 图片网格。
+  /// [focusableContent] 为 true 时（评论详情页首楼）整体可聚焦，
+  /// 聚焦后按确定键（或点击）进入图片预览。
+  Widget _buildContentBlock(
+    BuildContext context,
+    ColorScheme colorScheme,
+    EdgeInsets padding,
+  ) {
+    final replyControl = replyItem.replyControl;
+    final pictures = replyItem.content.pictures;
+    // 持有 widget 实例：确定键时直接调 previewAt 触发预览（与点击图片同路径）
+    final imageGrid = ImageGridView(
+      picArr: pictures
+          .map(
+            (item) => ImageModel(
+              width: item.imgWidth,
+              height: item.imgHeight,
+              url: item.imgSrc,
+            ),
+          )
+          .toList(),
+      onViewImage: onViewImage,
+    );
+    Widget block = Column(
+      mainAxisSize: .min,
+      crossAxisAlignment: .start,
+      children: [
         Padding(
           padding: padding,
           child: TextMore.rich(
@@ -381,51 +447,25 @@ class ReplyItemGrpc extends StatelessWidget {
             ),
           ),
         ),
-        if (replyItem.content.pictures.isNotEmpty) ...[
-          Padding(
-            padding: padding,
-            child: ImageGridView(
-              picArr: replyItem.content.pictures
-                  .map(
-                    (item) => ImageModel(
-                      width: item.imgWidth,
-                      height: item.imgHeight,
-                      url: item.imgSrc,
-                    ),
-                  )
-                  .toList(),
-              onViewImage: onViewImage,
-            ),
-          ),
+        if (pictures.isNotEmpty) ...[
+          Padding(padding: padding, child: imageGrid),
           const SizedBox(height: 4),
-        ],
-        if (replyLevel != 0) ...[
-          const SizedBox(height: 4),
-          // 主列表中这排按钮不参与焦点遍历（上下键只在主楼间移动）
-          if (focusableActions)
-            buttonAction(context, colorScheme, replyControl)
-          else
-            ExcludeFocus(
-              excluding: true,
-              child: buttonAction(context, colorScheme, replyControl),
-            ),
-        ],
-        if (replyLevel == 1 && replyItem.count > Int64.ZERO) ...[
-          Padding(
-            padding: const EdgeInsets.only(top: 5, bottom: 12),
-            child: focusableActions
-                ? replyItemRow(context, colorScheme, replyItem.replies)
-                : ExcludeFocus(
-                    excluding: true,
-                    child: replyItemRow(
-                      context,
-                      colorScheme,
-                      replyItem.replies,
-                    ),
-                  ),
-          ),
         ],
       ],
+    );
+    if (!focusableContent) {
+      return block;
+    }
+    return InkWell(
+      borderRadius: const .all(.circular(6)),
+      focusColor: colorScheme.primary.withValues(alpha: 0.10),
+      onTap: () {
+        // 有图片时进入图片预览；无图片时空操作（保留停靠点）
+        if (pictures.isNotEmpty) {
+          imageGrid.previewAt(context, 0);
+        }
+      },
+      child: block,
     );
   }
 

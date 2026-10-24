@@ -119,6 +119,9 @@ class ImageGridView extends StatelessWidget {
     );
   }
 
+  /// 供遥控器等外部触发图片预览（等效于点击第 [index] 张图片）。
+  void previewAt(BuildContext context, int index) => _onTap(context, index);
+
   static BorderRadius _borderRadius(
     int col,
     int length,

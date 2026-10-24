@@ -104,6 +104,15 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
 
   late final bool isDialogue = widget.dialog != null;
 
+  /// 首楼焦点节点。
+  /// 注意：评论详情是 MiniScaffold 的底部弹窗，与视频页同处一个 FocusScope，
+  /// 打开时原焦点（评论主楼）仍在，`autofocus` 会被 FocusManager 丢弃
+  /// （autofocus 仅在 scope.focusedChild == null 时生效），因此必须显式请求焦点。
+  late final FocusNode _firstFloorNode;
+
+  /// 打开本页前的焦点，关闭时归还
+  FocusNode? _previousFocus;
+
   /// 首楼（或其操作按钮）是否持有焦点，用于给首楼加焦点底色提示
   bool _firstFloorFocused = false;
 
@@ -121,6 +130,8 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
   @override
   void initState() {
     super.initState();
+    _previousFocus = FocusManager.instance.primaryFocus;
+    _firstFloorNode = FocusNode(debugLabel: 'replyDetailFirstFloor');
     _controller = Get.put(
       VideoReplyReplyController(
         hasRoot: widget.firstFloor != null,
@@ -132,10 +143,24 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
       ),
       tag: _tag,
     );
+    // 首楼数据可能异步到达（Obx 分支里也会再试一次，未挂载时为空操作）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _firstFloorNode.requestFocus();
+      }
+    });
   }
 
   @override
   void dispose() {
+    final previous = _previousFocus;
+    // 焦点归还给打开详情页前的节点（评论主楼）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (previous != null && previous.canRequestFocus) {
+        previous.requestFocus();
+      }
+    });
+    _firstFloorNode.dispose();
     Get.delete<VideoReplyReplyController>(tag: _tag);
     super.dispose();
   }
@@ -143,39 +168,42 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
   @override
   Widget buildPage(ThemeData theme) {
     Widget child() => enableSlide ? slideList(theme) : buildList(theme);
-    return SimpleColoredBox(
-      color: theme.canvasColor,
-      child: MiniScaffold(
-        body: widget.isVideoDetail
-            ? Column(
-                children: [
-                  Container(
-                    height: 45,
-                    decoration: BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(
-                          width: 1,
-                          color: theme.dividerColor.withValues(alpha: 0.1),
+    // FocusScope 把方向键遍历限制在详情页内，不会穿透到背后的视频页/评论列表
+    return FocusScope(
+      child: SimpleColoredBox(
+        color: theme.canvasColor,
+        child: MiniScaffold(
+          body: widget.isVideoDetail
+              ? Column(
+                  children: [
+                    Container(
+                      height: 45,
+                      decoration: BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                            width: 1,
+                            color: theme.dividerColor.withValues(alpha: 0.1),
+                          ),
                         ),
                       ),
+                      padding: const EdgeInsets.only(left: 12, right: 2),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: <Widget>[
+                          Text(isDialogue ? '对话列表' : '评论详情'),
+                          IconButton(
+                            tooltip: '关闭',
+                            icon: const Icon(Icons.close, size: 20),
+                            onPressed: Get.back,
+                          ),
+                        ],
+                      ),
                     ),
-                    padding: const EdgeInsets.only(left: 12, right: 2),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: <Widget>[
-                        Text(isDialogue ? '对话列表' : '评论详情'),
-                        IconButton(
-                          tooltip: '关闭',
-                          icon: const Icon(Icons.close, size: 20),
-                          onPressed: Get.back,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(child: child()),
-                ],
-              )
-            : child(),
+                    Expanded(child: child()),
+                  ],
+                )
+              : child(),
+        ),
       ),
     );
   }
@@ -206,6 +234,13 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
                 if (firstFloor == null) {
                   return const SliverToBoxAdapter();
                 }
+                // 首楼异步到达：补一次焦点请求（用户已操作过则不抢焦点）
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted &&
+                      FocusManager.instance.primaryFocus != _firstFloorNode) {
+                    _firstFloorNode.requestFocus();
+                  }
+                });
                 return _header(theme, firstFloor);
               }),
             _sortWidget(theme.colorScheme),
@@ -223,7 +258,7 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
       slivers: [
         SliverToBoxAdapter(
           child: Focus(
-            autofocus: true,
+            focusNode: _firstFloorNode,
             canRequestFocus: true,
             onFocusChange: (value) {
               if (mounted && value != _firstFloorFocused) {
@@ -231,9 +266,9 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
               }
             },
             onKeyEvent: (node, event) {
-              // 焦点在首楼整体上时，确定键把焦点送入操作按钮
-              // （回复/翻译/点赞/点踩）；焦点已在按钮上时放行，
-              // 由按钮自身响应确定键。
+              // 焦点在首楼整体上时，确定键把焦点送入“正文内容”
+              // （正文 + 图片，再往下是回复/翻译/点赞/点踩按钮排）；
+              // 焦点已在内部停靠点时放行，由其自身响应确定键。
               if (event is KeyDownEvent &&
                   FocusManager.instance.primaryFocus == node &&
                   _isConfirmKey(event.logicalKey)) {
@@ -252,6 +287,7 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
                 needDivider: false,
                 focusableBody: false,
                 focusableActions: true,
+                focusableContent: true,
                 onReply: (replyItem) =>
                     _controller.onReply(replyItem, index: -1),
                 upMid: widget.upMid ?? _controller.upMid,
