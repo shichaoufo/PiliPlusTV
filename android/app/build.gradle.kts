@@ -33,6 +33,13 @@ android {
         targetSdk = 37
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        ndk {
+            // 仅打包 armeabi-v7a（32 位安卓 TV），不再产出 arm64-v8a / x86_64。
+            // 注意：Flutter Gradle Plugin 在 apply 阶段会写入全部三个 ABI，
+            // 因此这里必须先 clear() 再写入，才能让本项目的过滤生效。
+            abiFilters.clear()
+            abiFilters.add("armeabi-v7a")
+        }
     }
 
     packagingOptions.jniLibs.useLegacyPackaging = true
