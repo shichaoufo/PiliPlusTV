@@ -71,6 +71,7 @@ import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
+import 'package:PiliPlus/utils/tv_focus.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, clampDouble;
 import 'package:flutter/services.dart' show KeyDownEvent, LogicalKeyboardKey;
@@ -140,12 +141,14 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   void _enterSidePanel() {
     if (!mounted) return;
     setState(() => _sidePanelActive = true);
+    TvFocusLevel.level = 1; // 侧栏 Tab 栏（最外层）
     _sideTabBarFocusNode.requestFocus();
   }
 
   void _exitSidePanel() {
     if (!mounted) return;
     setState(() => _sidePanelActive = false);
+    TvFocusLevel.level = 0; // 播放器
     _playerFocusNode.requestFocus();
   }
 
@@ -1255,7 +1258,19 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
         (videoDetailController.horizontalScreen || isPortrait),
     onPopInvokedWithResult: (didPop, result) {
       if (!didPop && _sidePanelActive && !isFullScreen) {
-        _exitSidePanel();
+        // 返回键按焦点层级分发（TvFocusLevel）：
+        // 1 = 侧栏最外层（Tab 栏）→ 焦点交还播放器；
+        // 2 = 侧栏内容（评论列表/相关视频）→ 焦点回 Tab 栏；
+        // ≥3 = 评论详情/评论内部 → 由详情页自己的 PopScope 处理，这里不动。
+        switch (TvFocusLevel.level) {
+          case 1:
+            _exitSidePanel();
+          case 2:
+            TvFocusLevel.level = 1;
+            _sideTabBarFocusNode.requestFocus();
+          default:
+            break;
+        }
         return;
       }
       videoDetailController.plPlayerController.onPopInvokedWithResult(
@@ -1449,6 +1464,10 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
             _switchSideTab(1);
             return KeyEventResult.handled;
         }
+        // 其他键（↓ 进内容、确定键打开等）放行给焦点遍历：
+        // 焦点即将离开 Tab 栏本体，进入侧栏内容层（层级 2），
+        // 此后返回键先回 Tab 栏，而不是直接交还播放器。
+        TvFocusLevel.level = 2;
         return KeyEventResult.ignored;
       },
       child: DecoratedBox(

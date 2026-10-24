@@ -25,6 +25,7 @@ import 'package:PiliPlus/pages/dynamics/widgets/vote.dart';
 import 'package:PiliPlus/pages/member/widget/medal_widget.dart';
 import 'package:PiliPlus/pages/save_panel/view.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
+import 'package:PiliPlus/pages/video/reply/widgets/reply_stops.dart';
 import 'package:PiliPlus/pages/video/reply/widgets/zan_grpc.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
@@ -78,8 +79,8 @@ class ReplyItemGrpc extends StatelessWidget {
     this.onToggleTop,
     this.jumpToDialogue,
     this.focusableBody = true,
-    this.focusableActions = false,
-    this.focusableContent = false,
+    this.innerStops,
+    this.onInnerFocusChange,
   });
   final ReplyInfo replyItem;
   final int replyLevel;
@@ -97,18 +98,18 @@ class ReplyItemGrpc extends StatelessWidget {
 
   /// 整项（评论主体）是否参与方向键焦点遍历。
   /// 评论主列表为 true（上下键在评论主楼间移动）；
-  /// 评论详情页的首楼为 false（确定键不落到无操作的主体上）。
+  /// 评论详情页为 false（整体停靠点由 [innerStops] 的 whole 节点承担）。
   final bool focusableBody;
 
-  /// 项内操作按钮（回复/翻译/点赞/点踩）是否参与方向键焦点遍历。
-  /// 主列表为 false（上下键只在主楼间移动，不进入楼中楼和按钮）；
-  /// 评论详情页首楼为 true（确定键把焦点送入这排按钮）。
-  final bool focusableActions;
+  /// 评论详情页的焦点停靠点集合（整条评论 + 内部各按钮）。
+  /// 非空时进入“详情页模式”：
+  /// - 整条评论是一个停靠点，上下键在评论之间移动；
+  /// - 内部停靠点（正文/回复/翻译/点踩/点赞）不参与方向键遍历，
+  ///   仅在整条评论上按确定键后进入，在停靠点之间选择。
+  final ReplyStops? innerStops;
 
-  /// “正文内容”（正文 + 图片）是否为独立焦点停靠点。
-  /// 仅评论详情页首楼为 true：聚焦后按确定键进入图片预览
-  /// （评论无图片时为空操作，停靠点仍保留）。
-  final bool focusableContent;
+  /// 焦点进入 / 退出评论内部时回调（详情页据此维护焦点层级）。
+  final ValueChanged<ReplyStops?>? onInnerFocusChange;
 
   static final _voteRegExp = RegExp(r"^\{vote:\d+?\}$");
   static final _timeRegExp = RegExp(r'^(?:\d+[:：])?\d+[:：]\d+$');
@@ -154,6 +155,43 @@ class ReplyItemGrpc extends StatelessWidget {
         ],
       );
     }
+    if (innerStops case final stops?) {
+      // 详情页模式：整条评论是一个停靠点（stops.whole），
+      // 内部停靠点 skipTraversal 不参与方向键遍历；
+      // 确定键进入内部，方向键在评论之间移动。
+      return Focus(
+        focusNode: stops.whole,
+        canRequestFocus: true,
+        onFocusChange: (value) => stops.wholeFocused.value = value,
+        onKeyEvent: (node, event) => ReplyStops.handleKey(
+          node,
+          event,
+          stops,
+          _innerStops(stops),
+          onEnterInner: () => onInnerFocusChange?.call(stops),
+          onExitInner: () => onInnerFocusChange?.call(null),
+        ),
+        child: ValueListenableBuilder<bool>(
+          valueListenable: stops.wholeFocused,
+          builder: (context, focused, _) => ColoredBox(
+            color: focused
+                ? ColorScheme.of(context).primary.withValues(alpha: 0.08)
+                : Colors.transparent,
+            child: Material(
+              type: MaterialType.transparency,
+              child: InkWell(
+                // 聚焦由 stops.whole 负责；这里只保留触摸交互
+                canRequestFocus: false,
+                onTap: () => replyReply?.call(replyItem, null),
+                onLongPress: showMore,
+                onSecondaryTap: PlatformUtils.isMobile ? null : showMore,
+                child: child,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return Material(
       type: MaterialType.transparency,
       child: InkWell(
@@ -165,6 +203,18 @@ class ReplyItemGrpc extends StatelessWidget {
       ),
     );
   }
+
+  /// 内部停靠点链（顺序即遥控器上的移动顺序）：
+  /// 正文 → 回复 → 翻译（若渲染）→ 点踩 → 点赞
+  List<FocusNode> _innerStops(ReplyStops stops) => [
+    stops.body,
+    stops.reply,
+    if (replyItem.replyControl.translationSwitch ==
+        .TRANSLATION_SWITCH_SHOW_TRANSLATION)
+      stops.translate,
+    stops.dislike,
+    stops.like,
+  ];
 
   Widget _buildHeader(BuildContext context, ColorScheme colorScheme) {
     final member = replyItem.member;
@@ -353,33 +403,32 @@ class ReplyItemGrpc extends StatelessWidget {
             padding: padding,
             child: _buildVoteOption(colorScheme, replyControl.voteOption),
           ),
-        // 正文 + 图片组成“正文内容”块。评论详情页首楼可整体聚焦，
-        // 聚焦后确定键进入图片预览；其余场景仅是排版包裹，交互不变。
+        // 正文 + 图片组成“正文内容”块。评论详情页中它是内部停靠点
+        // （确定键 → 图片预览）；其余场景仅是排版包裹，交互不变。
         _buildContentBlock(context, colorScheme, padding),
         if (replyLevel != 0) ...[
           const SizedBox(height: 4),
-          // 主列表中这排按钮不参与焦点遍历（上下键只在主楼间移动）
-          if (focusableActions)
-            buttonAction(context, colorScheme, replyControl)
-          else
+          // 主列表中这排按钮不参与焦点遍历（上下键只在主楼间移动）；
+          // 详情页中由 innerStops 的 skipTraversal 节点按需聚焦。
+          if (innerStops == null)
             ExcludeFocus(
               excluding: true,
               child: buttonAction(context, colorScheme, replyControl),
-            ),
+            )
+          else
+            buttonAction(context, colorScheme, replyControl),
         ],
         if (replyLevel == 1 && replyItem.count > Int64.ZERO) ...[
           Padding(
             padding: const EdgeInsets.only(top: 5, bottom: 12),
-            child: focusableActions
-                ? replyItemRow(context, colorScheme, replyItem.replies)
-                : ExcludeFocus(
-                    excluding: true,
-                    child: replyItemRow(
-                      context,
-                      colorScheme,
-                      replyItem.replies,
-                    ),
-                  ),
+            child: ExcludeFocus(
+              excluding: true,
+              child: replyItemRow(
+                context,
+                colorScheme,
+                replyItem.replies,
+              ),
+            ),
           ),
         ],
       ],
@@ -387,7 +436,7 @@ class ReplyItemGrpc extends StatelessWidget {
   }
 
   /// “正文内容”块：正文文字 + 图片网格。
-  /// [focusableContent] 为 true 时（评论详情页首楼）整体可聚焦，
+  /// 详情页模式（[innerStops] 非空）下整体是一个内部停靠点，
   /// 聚焦后按确定键（或点击）进入图片预览。
   Widget _buildContentBlock(
     BuildContext context,
@@ -453,23 +502,23 @@ class ReplyItemGrpc extends StatelessWidget {
         ],
       ],
     );
-    if (!focusableContent) {
+    if (innerStops == null) {
       return block;
     }
-    return FocusTraversalOrder(
-      // 详情页首楼的内部顺序：正文内容 = 1（其后是按钮排 2~5）
-      order: const NumericFocusOrder(1),
-      child: InkWell(
-        borderRadius: const .all(.circular(6)),
-        focusColor: colorScheme.primary.withValues(alpha: 0.10),
-        onTap: () {
-          // 有图片时进入图片预览；无图片时空操作（保留停靠点）
-          if (pictures.isNotEmpty) {
-            imageGrid.previewAt(context, 0);
-          }
-        },
-        child: block,
-      ),
+    // 内部停靠点：skipTraversal 节点（不参与方向键遍历，
+    // 由整条评论上的确定键 requestFocus 进入）
+    return InkWell(
+      focusNode: innerStops!.body,
+      canRequestFocus: true,
+      borderRadius: const .all(.circular(6)),
+      focusColor: colorScheme.primary.withValues(alpha: 0.10),
+      onTap: () {
+        // 有图片时进入图片预览；无图片时空操作（保留停靠点）
+        if (pictures.isNotEmpty) {
+          imageGrid.previewAt(context, 0);
+        }
+      },
+      child: block,
     );
   }
 
@@ -478,8 +527,9 @@ class ReplyItemGrpc extends StatelessWidget {
     ColorScheme colorScheme,
     ReplyControl replyControl,
     TextStyle textStyle,
-    ButtonStyle buttonStyle,
-  ) {
+    ButtonStyle buttonStyle, {
+    FocusNode? focusNode,
+  }) {
     late bool isProcessing = false;
     final color = replyControl.showTranslation
         ? colorScheme.primary
@@ -487,6 +537,7 @@ class ReplyItemGrpc extends StatelessWidget {
     return SizedBox(
       height: 32,
       child: TextButton(
+        focusNode: focusNode,
         style: buttonStyle,
         onPressed: () async {
           if (replyControl.showTranslation) {
@@ -577,53 +628,46 @@ class ReplyItemGrpc extends StatelessWidget {
       );
     }
 
-    // 详情页首楼（focusableActions）：给这排按钮设定显式遍历顺序，
-    // 顺序为 回复(2) → 翻译(3) → 点踩(4) → 点赞(5)，接在正文内容(1)之后。
-    // 默认几何遍历会因正文停靠点过宽而落到右侧的点赞，“回复”永远选不中。
-    Widget wrapOrder(double order, Widget child) => focusableActions
-        ? FocusTraversalOrder(order: NumericFocusOrder(order), child: child)
-        : child;
+    // 详情页模式：按钮直接使用 innerStops 的 skipTraversal 节点，
+    // 不参与方向键遍历，只能由整条评论上的确定键进入后聚焦。
+    final stops = innerStops;
 
     return Row(
       children: [
         const SizedBox(width: 36),
-        wrapOrder(
-          2,
-          SizedBox(
-            height: 32,
-            child: TextButton(
-              style: buttonStyle,
-              onPressed: () {
-                feedBack();
-                onReply?.call(replyItem);
-              },
-              child: Row(
-                spacing: 3,
-                mainAxisSize: .min,
-                children: [
-                  Icon(
-                    Icons.reply,
-                    size: 18,
-                    color: colorScheme.outline.withValues(alpha: 0.8),
-                  ),
-                  Text('回复', style: textStyle),
-                ],
-              ),
+        SizedBox(
+          height: 32,
+          child: TextButton(
+            focusNode: stops?.reply,
+            style: buttonStyle,
+            onPressed: () {
+              feedBack();
+              onReply?.call(replyItem);
+            },
+            child: Row(
+              spacing: 3,
+              mainAxisSize: .min,
+              children: [
+                Icon(
+                  Icons.reply,
+                  size: 18,
+                  color: colorScheme.outline.withValues(alpha: 0.8),
+                ),
+                Text('回复', style: textStyle),
+              ],
             ),
           ),
         ),
         const SizedBox(width: 2),
         if (replyControl.translationSwitch ==
             .TRANSLATION_SWITCH_SHOW_TRANSLATION) ...[
-          wrapOrder(
-            3,
-            _buildTranslateBtn(
-              context,
-              colorScheme,
-              replyControl,
-              textStyle,
-              buttonStyle,
-            ),
+          _buildTranslateBtn(
+            context,
+            colorScheme,
+            replyControl,
+            textStyle,
+            buttonStyle,
+            focusNode: stops?.translate,
           ),
           const SizedBox(width: 2),
         ] else if (replyControl.cardLabels.isNotEmpty) ...[
@@ -639,8 +683,8 @@ class ReplyItemGrpc extends StatelessWidget {
         const Spacer(),
         ZanButtonGrpc(
           replyItem: replyItem,
-          dislikeOrder: focusableActions ? 4 : null,
-          likeOrder: focusableActions ? 5 : null,
+          dislikeNode: stops?.dislike,
+          likeNode: stops?.like,
         ),
         const SizedBox(width: 5),
       ],
