@@ -123,6 +123,12 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
   /// 当前焦点处于“评论内部”的停靠点（null = 焦点在某条评论整体上）
   ReplyStops? _currentInner;
 
+  /// 详情弹窗正在关闭（关闭动画期间禁用返回键）。
+  /// 弹窗关闭走的是本地历史项移除（Get.back → Navigator.pop → LocalHistoryEntry），
+  /// 关闭动画期间 PopScope 仍未注销；此时若再次返回，本地历史已空，
+  /// Navigator.pop 会直接把视频页路由弹掉，因此必须挡掉。
+  bool _closing = false;
+
   @override
   void initState() {
     super.initState();
@@ -199,7 +205,7 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
       // 独立路由打开的详情页（非视频详情侧栏）不拦截，返回正常弹路由
       canPop: !widget.isVideoDetail,
       onPopInvokedWithResult: (didPop, result) {
-        if (didPop) {
+        if (didPop || _closing) {
           return;
         }
         final inner = _currentInner;
@@ -209,6 +215,7 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
           _onInnerStops(null);
         } else {
           // 焦点在某条评论整体上：关闭详情弹窗（焦点归还评论列表）
+          _closing = true;
           Get.back();
         }
       },

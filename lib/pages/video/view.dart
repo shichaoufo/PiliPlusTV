@@ -133,16 +133,48 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   // true : 焦点在右侧栏目（方向键走默认焦点遍历）
   bool _sidePanelActive = false;
   final FocusNode _playerFocusNode = FocusNode(debugLabel: 'video-player');
+
+  /// 侧栏最外层「Tab 栏一排」的感知节点（Tab 栏 + 发弹幕 + 弹幕开关）。
+  /// 自身不可聚焦、不参与遍历，仅用于：
+  /// 1. 高亮边框（焦点落在这一排时任一子节点时 hasFocus 为 true）；
+  /// 2. 返回键分发（hasFocus 即「焦点在最外层」→ 交还播放器）。
+  final FocusNode _sideRowFocusNode = FocusNode(
+    debugLabel: 'video-side-row',
+    canRequestFocus: false,
+  );
+
+  /// Tab 栏本体：左右键切换标签页。
   final FocusNode _sideTabBarFocusNode = FocusNode(
     debugLabel: 'video-side-tabbar',
   );
-  bool _sideTabBarFocused = false;
+
+  /// 「发弹幕」「弹幕开关」按钮：skipTraversal 让它们不参与方向键几何遍历
+  /// （否则从评论列表按上键时落点会随布局漂移），只能由 Tab 栏或相邻按钮
+  /// 显式聚焦；requestFocus 不检查 skipTraversal，触摸也不受影响。
+  final FocusNode _danmakuBtnFocusNode = FocusNode(
+    debugLabel: 'video-danmaku-btn',
+    skipTraversal: true,
+  );
+  final FocusNode _dmSwitchFocusNode = FocusNode(
+    debugLabel: 'video-danmaku-switch',
+    skipTraversal: true,
+  );
+  bool _sideRowFocused = false;
+
+  /// 把焦点移到侧栏最外层：Tab 栏本体（有标签页时）或「发弹幕」按钮
+  void _focusSideRowOuter() {
+    if (_sideTabBarFocusNode.context != null) {
+      _sideTabBarFocusNode.requestFocus();
+    } else {
+      _danmakuBtnFocusNode.requestFocus();
+    }
+  }
 
   void _enterSidePanel() {
     if (!mounted) return;
     setState(() => _sidePanelActive = true);
-    TvFocusLevel.level = 1; // 侧栏 Tab 栏（最外层）
-    _sideTabBarFocusNode.requestFocus();
+    TvFocusLevel.level = 1; // 侧栏最外层（Tab 栏一排）
+    _focusSideRowOuter();
   }
 
   void _exitSidePanel() {
@@ -375,7 +407,10 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   @override
   void dispose() {
     _playerFocusNode.dispose();
+    _sideRowFocusNode.dispose();
     _sideTabBarFocusNode.dispose();
+    _danmakuBtnFocusNode.dispose();
+    _dmSwitchFocusNode.dispose();
 
     plPlayerController
       ?..removeStatusLister(playerListener)
@@ -1258,18 +1293,19 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
         (videoDetailController.horizontalScreen || isPortrait),
     onPopInvokedWithResult: (didPop, result) {
       if (!didPop && _sidePanelActive && !isFullScreen) {
-        // 返回键按焦点层级分发（TvFocusLevel）：
-        // 1 = 侧栏最外层（Tab 栏）→ 焦点交还播放器；
-        // 2 = 侧栏内容（评论列表/相关视频）→ 焦点回 Tab 栏；
-        // ≥3 = 评论详情/评论内部 → 由详情页自己的 PopScope 处理，这里不动。
-        switch (TvFocusLevel.level) {
-          case 1:
-            _exitSidePanel();
-          case 2:
-            TvFocusLevel.level = 1;
-            _sideTabBarFocusNode.requestFocus();
-          default:
-            break;
+        // 评论详情页（层级 ≥3）打开时，由详情页自己的 PopScope 逐层退出，
+        // 这里不参与，避免把焦点从详情页抢走。
+        if (TvFocusLevel.level >= 3) {
+          return;
+        }
+        // 其余情况按「焦点实际所在位置」分发，不依赖可能滞后的层级计数：
+        // - 焦点在侧栏最外层（Tab 栏 / 发弹幕 / 弹幕开关）→ 交还播放器；
+        // - 焦点在侧栏内容（评论列表/相关视频/播放列表）→ 回 Tab 栏。
+        if (_sideRowFocusNode.hasFocus) {
+          _exitSidePanel();
+        } else {
+          TvFocusLevel.level = 1;
+          _focusSideRowOuter();
         }
         return;
       }
@@ -1441,39 +1477,51 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       );
     }
 
+    // 侧栏最外层 = 「Tab 栏一排」：标签页 + 发弹幕 + 弹幕开关。
+    // 外层 Focus 只感知「焦点是否落在这一排」（自身不可聚焦、不参与遍历），
+    // 用于高亮边框、返回键分发，并接管两个按钮上的 ←→；
+    // 标签页与右侧按钮各自是独立焦点停靠点（节点直接传给按钮的
+    // focusNode 参数——若再包一层 Focus，确定键的 Actions 查找只向上，
+    // 会找不到按钮 InkWell 的 ActivateIntent，导致确定键失效）。
     return Focus(
-      focusNode: _sideTabBarFocusNode,
-      canRequestFocus: true,
+      focusNode: _sideRowFocusNode,
+      canRequestFocus: false,
       onFocusChange: (_) {
         if (mounted) {
-          setState(() => _sideTabBarFocused = _sideTabBarFocusNode.hasFocus);
+          setState(() => _sideRowFocused = _sideRowFocusNode.hasFocus);
         }
       },
       onKeyEvent: (node, event) {
-        // 仅当焦点在 Tab 栏本身时，左右键切换 Tab；
-        // 焦点在栏内按钮（发弹幕/弹幕开关）上时不拦截。
-        if (event is! KeyDownEvent ||
-            FocusManager.instance.primaryFocus != node) {
+        // 焦点在右侧两个按钮上时，←→ 在一排内移动
+        // （Tab 栏本体的左右键由它自己的 onKeyEvent 优先处理）。
+        if (event is! KeyDownEvent) {
           return KeyEventResult.ignored;
         }
-        switch (event.logicalKey) {
-          case LogicalKeyboardKey.arrowLeft:
-            _switchSideTab(-1);
-            return KeyEventResult.handled;
-          case LogicalKeyboardKey.arrowRight:
-            _switchSideTab(1);
-            return KeyEventResult.handled;
+        final primary = FocusManager.instance.primaryFocus;
+        if (primary == _danmakuBtnFocusNode) {
+          switch (event.logicalKey) {
+            case LogicalKeyboardKey.arrowLeft:
+              _focusSideRowOuter();
+              return KeyEventResult.handled;
+            case LogicalKeyboardKey.arrowRight:
+              _dmSwitchFocusNode.requestFocus();
+              return KeyEventResult.handled;
+          }
+        } else if (primary == _dmSwitchFocusNode) {
+          switch (event.logicalKey) {
+            case LogicalKeyboardKey.arrowLeft:
+              _danmakuBtnFocusNode.requestFocus();
+              return KeyEventResult.handled;
+            case LogicalKeyboardKey.arrowRight:
+              return KeyEventResult.handled; // 最右：无操作
+          }
         }
-        // 其他键（↓ 进内容、确定键打开等）放行给焦点遍历：
-        // 焦点即将离开 Tab 栏本体，进入侧栏内容层（层级 2），
-        // 此后返回键先回 Tab 栏，而不是直接交还播放器。
-        TvFocusLevel.level = 2;
         return KeyEventResult.ignored;
       },
       child: DecoratedBox(
         decoration: BoxDecoration(
           border: Border(
-            top: _sideTabBarFocused
+            top: _sideRowFocused
                 ? BorderSide(color: colorScheme.primary, width: 2)
                 : BorderSide.none,
             bottom: BorderSide(
@@ -1493,13 +1541,64 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                     alignment: .centerLeft,
                     child: ConstrainedBox(
                       constraints: BoxConstraints(maxWidth: 96.0 * tabs.length),
-                      child: tabBar(),
+                      child: Focus(
+                        focusNode: _sideTabBarFocusNode,
+                        canRequestFocus: true,
+                        onFocusChange: (hasFocus) {
+                          if (!mounted) return;
+                          setState(
+                            () => _sideRowFocused = _sideRowFocusNode.hasFocus,
+                          );
+                          if (!hasFocus &&
+                              !_sideRowFocusNode.hasFocus &&
+                              TvFocusLevel.level == 1) {
+                            // 焦点离开最外层进入侧栏内容
+                            TvFocusLevel.level = 2;
+                          }
+                        },
+                        onKeyEvent: (node, event) {
+                          // 仅当焦点在 Tab 栏本体时拦截按键：
+                          // - 左右键切换标签页；最右的标签页按右键把焦点
+                          //   交给「发弹幕」按钮（最左按左键无操作，
+                          //   避免焦点跑进播放器控制条）；
+                          // - 确定键：进入当前标签页的内容；
+                          // - ↓ 等放行，走默认几何遍历进入侧栏内容。
+                          if (event is! KeyDownEvent ||
+                              FocusManager.instance.primaryFocus != node) {
+                            return KeyEventResult.ignored;
+                          }
+                          final tabCtr = videoDetailController.tabCtr;
+                          switch (event.logicalKey) {
+                            case LogicalKeyboardKey.arrowLeft:
+                              if (tabCtr.index > 0) {
+                                _switchSideTab(-1);
+                              }
+                              return KeyEventResult.handled;
+                            case LogicalKeyboardKey.arrowRight:
+                              if (tabCtr.index < tabCtr.length - 1) {
+                                _switchSideTab(1);
+                              } else {
+                                _danmakuBtnFocusNode.requestFocus();
+                              }
+                              return KeyEventResult.handled;
+                            case LogicalKeyboardKey.enter:
+                            case LogicalKeyboardKey.select:
+                            case LogicalKeyboardKey.gameButtonA:
+                            case LogicalKeyboardKey.space:
+                              node.focusInDirection(TraversalDirection.down);
+                              return KeyEventResult.handled;
+                          }
+                          return KeyEventResult.ignored;
+                        },
+                        child: tabBar(),
+                      ),
                     ),
                   ),
                 ),
               SizedBox(
                 height: 32,
                 child: TextButton(
+                  focusNode: _danmakuBtnFocusNode,
                   style: const ButtonStyle(
                     padding: WidgetStatePropertyAll(.zero),
                   ),
@@ -1520,6 +1619,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                     final ctr = videoDetailController.plPlayerController;
                     final enableShowDanmaku = ctr.enableShowDanmaku.value;
                     return IconButton(
+                      focusNode: _dmSwitchFocusNode,
                       onPressed: () {
                         final newVal = !enableShowDanmaku;
                         ctr.enableShowDanmaku.value = newVal;
